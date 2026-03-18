@@ -1,0 +1,26 @@
+[build-system]
+requires = [
+  "hatchling",
+  "hatch-requirements-txt",
+  "hatch-fancy-pypi-readme>=22.5.0",
+]
+build-backend = "hatchling.build"
+
+[project]
+name = "hf-gradio"
+version = "0.1.0"
+description = "An extension of the Hugging Face CLI for interacting with Gradio Spaces and Apps."
+requires-python = ">=3.10"
+dependencies = ["typer", "gradio_client>=2.0,<3.0"]
+
+[project.optional-dependencies]
+dev = [
+  "ruff",
+  "ty",
+]
+
+[project.scripts]
+hf-gradio = "hf_gradio.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/gradio-app/hf-gradio#"
