@@ -2,103 +2,101 @@ from __future__ import annotations
 
 import typer
 from typing import Annotated, Any
-from gradio_client import Client, handle_file
+from gradio_client import Client
 from gradio_client.utils import traverse
-import copy
 import json
 
 app = typer.Typer()
 
-regex_pattern = r"(?i)\bdict\(.*?\bpath:.*?\burl:.*?\)(?=\s*\||\]|$)"
 
-class APIInfoParseError(ValueError):
-    pass
-
-
-def _get_type(schema: dict):
-    if "const" in schema:
-        return "const"
-    if "enum" in schema:
-        return "enum"
-    elif "type" in schema:
-        return schema["type"]
-    elif schema.get("$ref"):
-        return "$ref"
-    elif schema.get("oneOf"):
-        return "oneOf"
-    elif schema.get("anyOf"):
-        return "anyOf"
-    elif schema.get("allOf"):
-        return "allOf"
-    elif "type" not in schema:
-        return {}
-    else:
-        raise APIInfoParseError(f"Cannot parse type for {schema}")
-
-
-def simplify_json_schema(schema: Any):
-    return traverse(schema, _simplify_json_schema, lambda x: isinstance(x, dict) and "properties" in x)
-
-
-def _simplify_json_schema(schema: Any) -> Any:
-    """Convert the json schema into a python type hint"""
-
-    props = schema.get("properties", {})
-    print("SCHEMA", schema, "props", props)
-    if "meta" in props and "path" in props:
-        new_schema = copy.deepcopy(schema)
-        for prop in props:
-            if prop not in ["meta", "path"]:
-                del new_schema["properties"][prop]
-        new_schema["properties"]["path"]["description"] = "Path to a local file or publicly available url"
-        return new_schema
-    else:
+def _resolve_refs(schema: Any, defs: dict[str, Any] | None = None) -> Any:
+    """Recursively resolve $ref references and remove $defs."""
+    if not isinstance(schema, dict):
+        if isinstance(schema, list):
+            return [_resolve_refs(item, defs) for item in schema]
         return schema
-    
+
+    if defs is None:
+        defs = schema.get("$defs", {})
+
+    if "$ref" in schema:
+        ref_path = schema["$ref"]
+        ref_name = ref_path.split("/")[-1]
+        if ref_name in defs:
+            return _resolve_refs(defs[ref_name], defs)
+        return schema
+
+    resolved = {}
+    for key, value in schema.items():
+        if key == "$defs":
+            continue
+        resolved[key] = _resolve_refs(value, defs)
+    return resolved
 
 
-# def _condense_info(info: dict[str, Any]):
-#     condensed_info = {}
-#     for endpoint, data_format in info["named_endpoints"].items():
-#         endpoint_info = {"parameters": [], "returns": [], "description": data_format.get("description", "")}
-#         for param in data_format["parameters"]:
-#             python_type = re.sub(regex_pattern, , param["python_type"]["type"])
-#             endpoint_info["parameters"].append(
-#                 {
-#                     "name": param["parameter_name"],
-#                     "required": not param["parameter_has_default"],
-#                     "default": param["parameter_default"],
-#                     "type": python_type,
-#                 }
-#             )
-#         for output in data_format["returns"]:
-#             python_type = re.sub(regex_pattern, "filepath", output["python_type"]["type"])
-#             endpoint_info["returns"].append(
-#                 {"name": output["label"], "type": python_type}
-#             )
-#         condensed_info[endpoint] = endpoint_info
-#     return condensed_info
+def simplify_json_schema(schema: Any, is_input: bool = True):
+    schema = _resolve_refs(schema)
+    simplifier = _make_file_simplifier(is_input)
+    return traverse(
+        schema,
+        simplifier,
+        lambda x: (
+            isinstance(x, dict)
+            and "meta" in x.get("properties", {})
+            and "path" in x.get("properties", {})
+        ),
+    )
+
+
+def _make_file_simplifier(is_input: bool):
+    def _simplify(schema: Any) -> Any:
+        props = schema.get("properties", {})
+        if "meta" in props and "path" in props:
+            if is_input:
+                return {
+                    "type": "filepath",
+                    "description": (
+                        'Must include {"path": "<local path or url>", "meta": {"_type": "gradio.FileData"}}. '
+                        "The meta key signals that the file will be uploaded to the remote server."
+                    ),
+                }
+            else:
+                return {
+                    "type": "filepath",
+                    "description": "The returned file path on disk.",
+                }
+        return schema
+
+    return _simplify
+
 
 def _condense_info(info: dict[str, Any]):
     condensed_info = {}
     for endpoint, data_format in info["named_endpoints"].items():
-        endpoint_info = {"parameters": [], "returns": [], "description": data_format.get("description", "")}
+        endpoint_info = {
+            "parameters": [],
+            "returns": [],
+            "description": data_format.get("description", ""),
+        }
         for param in data_format["parameters"]:
-            #python_type = re.sub(regex_pattern, , param["python_type"]["type"])
             endpoint_info["parameters"].append(
                 {
                     "name": param["parameter_name"],
                     "required": not param["parameter_has_default"],
                     "default": param["parameter_default"],
-                    "type": simplify_json_schema(param["type"]),
+                    "type": simplify_json_schema(param["type"], is_input=True),
                 }
             )
         for output in data_format["returns"]:
             endpoint_info["returns"].append(
-                {"name": output["label"], "type": simplify_json_schema(output["type"])}
+                {
+                    "name": output["label"],
+                    "type": simplify_json_schema(output["type"], is_input=False),
+                }
             )
         condensed_info[endpoint] = endpoint_info
     return condensed_info
+
 
 @app.command()
 def info(
@@ -123,7 +121,8 @@ def info(
 
 
 @app.command()
-def predict(space_id_or_url: Annotated[
+def predict(
+    space_id_or_url: Annotated[
         str,
         typer.Argument(
             help="The space id, e.g. gradio/calculator or URL of the Gradio application"
@@ -136,12 +135,20 @@ def predict(space_id_or_url: Annotated[
         typer.Option(
             help="optional Hugging Face token to use to access private Spaces. By default, the locally saved token is used if there is one.",
         ),
-    ] = None):
-    client = Client(src=space_id_or_url, token=token, verbose=False)
-    info_ = _condense_info(client.view_api(return_format="dict", print_info=False)).get(endpoint, {})
+    ] = None,
+):
+    """Sends a prediction request to a Gradio app endpoint."""
+    client = Client(
+        src=space_id_or_url, token=token, verbose=False, download_files=True
+    )
     payload = json.loads(payload)
-    for param in info_['parameters']:
-        if param["type"] == "filepath":
-            payload[param["name"]] = handle_file(payload[param["name"]])
     result = client.predict(**payload, api_name=endpoint)
-    print(result)
+
+    original_info = client.view_api(return_format="dict", print_info=False)
+    condensed_info = _condense_info(original_info)
+    return_names = [r["name"] for r in condensed_info[endpoint]["returns"]]
+
+    if not isinstance(result, tuple):
+        result = (result,)
+    output = dict(zip(return_names, result))
+    print(json.dumps(output, indent=2))
