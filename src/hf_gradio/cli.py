@@ -34,17 +34,30 @@ def _resolve_refs(schema: Any, defs: dict[str, Any] | None = None) -> Any:
     return resolved
 
 
+def _is_file_schema(schema: Any) -> bool:
+    """Check if a schema represents a file type (has path + meta with gradio.FileData)."""
+    if not isinstance(schema, dict):
+        return False
+    props = schema.get("properties", {})
+    if "path" not in props or "meta" not in props:
+        return False
+    meta = props["meta"]
+    meta_props = meta.get("properties", {})
+    if "_type" in meta_props:
+        return meta_props["_type"].get("const") == "gradio.FileData"
+    meta_default = meta.get("default", {})
+    if isinstance(meta_default, dict):
+        return meta_default.get("_type") == "gradio.FileData"
+    return False
+
+
 def simplify_json_schema(schema: Any, is_input: bool = True):
     schema = _resolve_refs(schema)
     simplifier = _make_file_simplifier(is_input)
     return traverse(
         schema,
         simplifier,
-        lambda x: (
-            isinstance(x, dict)
-            and "meta" in x.get("properties", {})
-            and "path" in x.get("properties", {})
-        ),
+        _is_file_schema,
     )
 
 
