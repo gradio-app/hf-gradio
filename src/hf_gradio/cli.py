@@ -3,6 +3,7 @@ from __future__ import annotations
 import typer
 from typing import Annotated, Any
 from gradio_client import Client
+from gradio_client.client import DEFAULT_TEMP_DIR
 from gradio_client.utils import traverse
 import json
 
@@ -23,7 +24,7 @@ def _resolve_refs(schema: Any, defs: dict[str, Any] | None = None) -> Any:
         ref_path = schema["$ref"]
         ref_name = ref_path.split("/")[-1]
         if ref_name in defs:
-            return _resolve_refs(defs[ref_name], defs)
+            return _resolve_refs(defs[ref_name], defs)  # type: ignore
         return schema
 
     resolved = {}
@@ -129,7 +130,7 @@ def info(
     """Fetches the expected JSON payload for all of the app's endpoints."""
     client = Client(src=space_id_or_url, token=token, verbose=False)
     original_info = client.view_api(return_format="dict", print_info=False)
-    condensed_info = _condense_info(original_info)
+    condensed_info = _condense_info(original_info)  # type: ignore
     print(json.dumps(condensed_info, indent=2))
 
 
@@ -143,6 +144,12 @@ def predict(
     ],
     endpoint: Annotated[str, typer.Argument(help="The endpoint to hit")],
     payload: Annotated[str, typer.Argument(help="The payload to send to the space")],
+    download_files: Annotated[
+        str,
+        typer.Option(
+            help="The directory where the files created by the space are downloaded to on your local machine. By default, this is the Gradio temporary directory. If False, a URL pointing to the file on the remote app will be returned instead."
+        ),
+    ] = DEFAULT_TEMP_DIR,
     token: Annotated[
         str | None,
         typer.Option(
@@ -152,13 +159,16 @@ def predict(
 ):
     """Sends a prediction request to a Gradio app endpoint."""
     client = Client(
-        src=space_id_or_url, token=token, verbose=False, download_files=True
+        src=space_id_or_url,
+        token=token,
+        verbose=False,
+        download_files=download_files if download_files != "False" else False,
     )
     payload = json.loads(payload)
-    result = client.predict(**payload, api_name=endpoint)
+    result = client.predict(**payload, api_name=endpoint)  # type: ignore
 
     original_info = client.view_api(return_format="dict", print_info=False)
-    condensed_info = _condense_info(original_info)
+    condensed_info = _condense_info(original_info)  # type: ignore
     return_names = [r["name"] for r in condensed_info[endpoint]["returns"]]
 
     if not isinstance(result, tuple):
