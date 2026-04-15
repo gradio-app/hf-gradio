@@ -112,6 +112,22 @@ def _condense_info(info: dict[str, Any]):
     return condensed_info
 
 
+def generate_cli_snippet(original_info):
+    endpoints = {}
+    for endpoint, info in original_info.items():
+        params = json.dumps(
+            {
+                p["parameter_name"]: p["parameter_default"] or p["example_input"]
+                for p in info["parameters"]
+            },
+            indent=2,
+        )
+        endpoints[endpoint] = f"""
+{{command}} predict {{space_id}} {endpoint} '{params}'
+"""
+    return endpoints
+
+
 @app.command()
 def info(
     space_id_or_url: Annotated[
