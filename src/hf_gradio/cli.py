@@ -52,6 +52,14 @@ def _is_file_schema(schema: Any) -> bool:
     return False
 
 
+def _is_file_dict(d):
+    return (
+        isinstance(d, dict)
+        and isinstance(d.get("path", None), str)
+        and d.get("meta") == {"_type": "gradio.FileData"}
+    )
+
+
 def simplify_json_schema(schema: Any, is_input: bool = True):
     schema = _resolve_refs(schema)
     simplifier = _make_file_simplifier(is_input)
@@ -112,12 +120,20 @@ def _condense_info(info: dict[str, Any]):
     return condensed_info
 
 
+def _delete_keys(d):
+    return {k: v for k, v in d.items() if k in ["path", "meta"]}
+
+
 def generate_cli_snippet(original_info):
     endpoints = {}
     for endpoint, info in original_info.items():
         params = json.dumps(
             {
-                p["parameter_name"]: p["parameter_default"] or p["example_input"]
+                p["parameter_name"]: traverse(
+                    p["parameter_default"] or p["example_input"],
+                    _delete_keys,
+                    _is_file_dict,
+                )
                 for p in info["parameters"]
             },
             indent=2,
