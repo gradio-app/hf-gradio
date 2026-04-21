@@ -60,9 +60,9 @@ def _is_file_dict(d):
     )
 
 
-def simplify_json_schema(schema: Any, is_input: bool = True):
+def simplify_json_schema(schema: Any, is_input: bool = True, url_only: bool = False):
     schema = _resolve_refs(schema)
-    simplifier = _make_file_simplifier(is_input)
+    simplifier = _make_file_simplifier(is_input, url_only)
     return traverse(
         schema,
         simplifier,
@@ -70,19 +70,28 @@ def simplify_json_schema(schema: Any, is_input: bool = True):
     )
 
 
-def _make_file_simplifier(is_input: bool):
+def _make_file_simplifier(is_input: bool, url_only: bool = False):
     def _simplify(schema: Any) -> Any:
         props = schema.get("properties", {})
         if "meta" in props and "path" in props:
             if is_input:
+                if url_only:
+                    desc = 'Must include {"path": "url", "meta": {"_type": "gradio.FileData"}}. '
+                else:
+                    desc = 'Must include {"path": "<local path or url>", "meta": {"_type": "gradio.FileData"}}. '
                 return {
                     "type": "filepath",
                     "description": (
-                        'Must include {"path": "<local path or url>", "meta": {"_type": "gradio.FileData"}}. '
-                        "The meta key signals that the file will be uploaded to the remote server."
+                        desc
+                        + "The meta key signals that the file will be uploaded to the remote server."
                     ),
                 }
             else:
+                if url_only:
+                    return {
+                        "type": "object",
+                        "description": "JSON object with url key to fetch the output",
+                    }
                 return {
                     "type": "filepath",
                     "description": "The returned file path on disk.",
@@ -92,7 +101,7 @@ def _make_file_simplifier(is_input: bool):
     return _simplify
 
 
-def _condense_info(info: dict[str, Any]):
+def _condense_info(info: dict[str, Any], url_only: bool = False):
     condensed_info = {}
     for endpoint, data_format in info["named_endpoints"].items():
         endpoint_info = {
@@ -106,14 +115,18 @@ def _condense_info(info: dict[str, Any]):
                     "name": param["parameter_name"],
                     "required": not param["parameter_has_default"],
                     "default": param["parameter_default"],
-                    "type": simplify_json_schema(param["type"], is_input=True),
+                    "type": simplify_json_schema(
+                        param["type"], is_input=True, url_only=url_only
+                    ),
                 }
             )
         for output in data_format["returns"]:
             endpoint_info["returns"].append(
                 {
                     "name": output["label"],
-                    "type": simplify_json_schema(output["type"], is_input=False),
+                    "type": simplify_json_schema(
+                        output["type"], is_input=False, url_only=url_only
+                    ),
                 }
             )
         condensed_info[endpoint] = endpoint_info
@@ -140,7 +153,7 @@ def generate_cli_snippet(original_info):
         )
         endpoints[endpoint] = f"""
 {{command}} predict {{space_id}} {endpoint} '{params}'
-"""
+""".lstrip("\n")
     return endpoints
 
 
